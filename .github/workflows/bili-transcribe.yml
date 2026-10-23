@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 env:
   CHUNK_SECONDS: 420
@@ -27,16 +28,28 @@ jobs:
 
       - name: Install
         run: |
-          pip install -q "requests[socks]" yt-dlp
+          pip install -q "requests[socks]" yt-dlp numpy
           command -v ffmpeg || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
 
-      - name: Fetch directly
-        id: direct
+      - name: Reuse cached audio
+        id: cache
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           BV=$(tr -d '[:space:]' < tools/bili/job.txt)
           DIR="results/$BV"
           echo "BV=$BV" >> "$GITHUB_ENV"
           echo "DIR=$DIR" >> "$GITHUB_ENV"
+          mkdir -p "$DIR"
+          id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=audio-$BV" --jq '[.artifacts[] | select(.expired | not)][0].id // empty' || true)
+          if [ -n "$id" ] && gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > /tmp/audio.zip; then
+            unzip -o /tmp/audio.zip -d "$DIR" && echo "hit=1" >> "$GITHUB_OUTPUT"
+          fi
+          ls -la "$DIR"
+
+      - name: Fetch directly
+        id: direct
+        run: |
           python tools/bili/fetch.py "$BV" "$DIR" || echo "direct fetch failed"
           if [ ! -s "$DIR/audio.m4a" ]; then
             echo "API audio failed, trying yt-dlp"
@@ -60,14 +73,19 @@ jobs:
             yt-dlp --proxy socks5://127.0.0.1:40000 --http-chunk-size 1M --retries 10 -f bestaudio -o "$DIR/audio.m4a" "https://www.bilibili.com/video/$BV" || true
           fi
 
+      - uses: actions/upload-artifact@v4
+        if: steps.cache.outputs.hit != '1'
+        with:
+          name: audio-${{ env.BV }}
+          path: ${{ env.DIR }}/audio.m4a
+          retention-days: 1
+
       - name: Split audio
         id: split
         run: |
           ls -la "$DIR"
-          mkdir -p chunks
-          ffmpeg -nostdin -loglevel error -i "$DIR/audio.m4a" -ac 1 -ar 16000 \
-            -f segment -segment_time "$CHUNK_SECONDS" -reset_timestamps 1 chunks/c%02d.wav
-          rm -f "$DIR"/audio.*
+          python tools/bili/split.py "$DIR/audio.m4a" chunks "$CHUNK_SECONDS" "$DIR/audio_diagnostics.txt"
+          rm -f "$DIR"/audio.m4a
           ls -la chunks
           echo "list=$(ls chunks | sed 's/\.wav$//' | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
 

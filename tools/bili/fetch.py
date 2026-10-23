@@ -241,4 +241,5 @@ tags()
 subtitles()
 conclusion()
 comments()
-audio()
+if not (OUT / "audio.m4a").exists():
+    audio()
