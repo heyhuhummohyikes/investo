@@ -1,17 +1,17 @@
-"""Transcribe audio with faster-whisper on CPU.
+"""Transcribe one 16 kHz mono WAV chunk with faster-whisper on CPU.
 
-Usage: python transcribe.py <AUDIO> <OUT_DIR> <DURATION_SECONDS>
+Usage: python transcribe.py <WAV> <OUT_TXT> <OFFSET_SECONDS>
+Timestamps in the output are shifted by OFFSET so chunks can be concatenated.
 """
 import os
-import pathlib
 import sys
 import time
+import wave
 
+import numpy as np
 from faster_whisper import WhisperModel
 
-audio, out, duration = sys.argv[1], pathlib.Path(sys.argv[2]), float(sys.argv[3])
-model_name = os.environ.get("WHISPER_MODEL") or ("medium" if duration <= 40 * 60 else "small")
-print(f"[asr] model={model_name} duration={duration:.0f}s cpus={os.cpu_count()}", flush=True)
+wav, out_txt, offset = sys.argv[1], sys.argv[2], float(sys.argv[3])
 
 try:
     from opencc import OpenCC
@@ -19,8 +19,23 @@ try:
 except Exception:
     to_simplified = lambda s: s
 
-model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=os.cpu_count() or 4)
-segments, info = model.transcribe(
+# Decode the WAV ourselves so faster-whisper never touches PyAV.
+with wave.open(wav) as w:
+    assert w.getframerate() == 16000 and w.getnchannels() == 1 and w.getsampwidth() == 2
+    audio = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768.0
+print(f"[asr] {wav}: {len(audio) / 16000:.0f}s offset={offset:.0f}s cpus={os.cpu_count()}", flush=True)
+
+threads = os.cpu_count() or 4
+model = None
+for name in [os.environ.get("WHISPER_MODEL", "large-v3-turbo"), "medium"]:
+    try:
+        model = WhisperModel(name, device="cpu", compute_type="int8", cpu_threads=threads)
+        print(f"[asr] model={name}", flush=True)
+        break
+    except Exception as e:
+        print(f"[asr] load {name} failed: {e!r}", flush=True)
+
+segments, _ = model.transcribe(
     audio,
     language=os.environ.get("ASR_LANG", "zh"),
     beam_size=5,
@@ -31,10 +46,12 @@ segments, info = model.transcribe(
 
 t0, lines = time.time(), []
 for seg in segments:
-    m, s = divmod(int(seg.start), 60)
+    m, s = divmod(int(seg.start + offset), 60)
     lines.append(f"[{m:02d}:{s:02d}] {to_simplified(seg.text.strip())}")
-    if len(lines) % 50 == 0:
-        print(f"[asr] {seg.end:.0f}/{duration:.0f}s after {time.time() - t0:.0f}s", flush=True)
+    if len(lines) % 25 == 0:
+        print(f"[asr] {seg.end:.0f}s done after {time.time() - t0:.0f}s", flush=True)
 
-(out / "transcript.txt").write_text("\n".join(lines), encoding="utf-8")
+os.makedirs(os.path.dirname(out_txt) or ".", exist_ok=True)
+with open(out_txt, "w", encoding="utf-8") as f:
+    f.write("\n".join(lines) + "\n")
 print(f"[asr] done: {len(lines)} segments in {time.time() - t0:.0f}s", flush=True)

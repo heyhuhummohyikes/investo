@@ -9,10 +9,15 @@ on:
 permissions:
   contents: write
 
+env:
+  CHUNK_SECONDS: 420
+
 jobs:
-  transcribe:
+  fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 30
+    outputs:
+      chunks: ${{ steps.split.outputs.list }}
     steps:
       - uses: actions/checkout@v4
 
@@ -21,17 +26,26 @@ jobs:
           python-version: "3.12"
 
       - name: Install
-        run: pip install -q "requests[socks]" yt-dlp faster-whisper opencc-python-reimplemented
+        run: |
+          pip install -q "requests[socks]" yt-dlp
+          command -v ffmpeg || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
 
       - name: Fetch directly
+        id: direct
         run: |
           BV=$(tr -d '[:space:]' < tools/bili/job.txt)
+          DIR="results/$BV"
           echo "BV=$BV" >> "$GITHUB_ENV"
-          echo "DIR=results/$BV" >> "$GITHUB_ENV"
-          python tools/bili/fetch.py "$BV" "results/$BV" || echo "direct fetch failed"
+          echo "DIR=$DIR" >> "$GITHUB_ENV"
+          python tools/bili/fetch.py "$BV" "$DIR" || echo "direct fetch failed"
+          if [ ! -s "$DIR/audio.m4a" ]; then
+            echo "API audio failed, trying yt-dlp"
+            yt-dlp --http-chunk-size 1M --retries 10 -f bestaudio -o "$DIR/audio.m4a" "https://www.bilibili.com/video/$BV" || true
+          fi
+          if [ -s "$DIR/audio.m4a" ]; then echo "ok=1" >> "$GITHUB_OUTPUT"; fi
 
       - name: Fetch via Cloudflare WARP proxy
-        if: hashFiles(format('{0}/audio.m4a', env.DIR)) == ''
+        if: steps.direct.outputs.ok != '1'
         run: |
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
@@ -41,29 +55,101 @@ jobs:
           warp-cli --accept-tos mode proxy
           warp-cli --accept-tos connect
           sleep 8
-          curl -s -x socks5h://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace | grep -E 'ip=|warp=' || true
           BILI_PROXY=socks5h://127.0.0.1:40000 python tools/bili/fetch.py "$BV" "$DIR" || echo "warp fetch failed"
           if [ ! -s "$DIR/audio.m4a" ]; then
-            echo "API audio failed, trying yt-dlp via WARP"
-            yt-dlp --proxy socks5://127.0.0.1:40000 -f bestaudio -o "$DIR/audio.m4a" "https://www.bilibili.com/video/$BV" || true
+            yt-dlp --proxy socks5://127.0.0.1:40000 --http-chunk-size 1M --retries 10 -f bestaudio -o "$DIR/audio.m4a" "https://www.bilibili.com/video/$BV" || true
           fi
-          ls -la "$DIR" || true
 
-      - name: Transcribe
+      - name: Split audio
+        id: split
         run: |
-          if [ -s "$DIR/subtitles.txt" ] && [ "$(wc -l < "$DIR/subtitles.txt")" -gt 20 ]; then
-            echo "Platform subtitles found; skipping ASR"
-            exit 0
-          fi
-          DUR=$(python -c "import json;print(json.load(open('$DIR/meta.json'))['duration'])" 2>/dev/null || echo 0)
-          python tools/bili/transcribe.py "$DIR/audio.m4a" "$DIR" "$DUR"
+          ls -la "$DIR"
+          mkdir -p chunks
+          ffmpeg -nostdin -loglevel error -i "$DIR/audio.m4a" -ac 1 -ar 16000 \
+            -f segment -segment_time "$CHUNK_SECONDS" -reset_timestamps 1 chunks/c%02d.wav
+          rm -f "$DIR"/audio.*
+          ls -la chunks
+          echo "list=$(ls chunks | sed 's/\.wav$//' | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
 
-      - name: Commit results
+      - uses: actions/upload-artifact@v4
         if: always()
+        with:
+          name: results
+          path: results
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chunks
+          path: chunks
+          retention-days: 1
+
+  asr:
+    needs: fetch
+    if: needs.fetch.outputs.chunks != '' && needs.fetch.outputs.chunks != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: ${{ fromJSON(needs.fetch.outputs.chunks) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: chunks
+          path: chunks
+
+      - name: Install
+        run: pip install -q faster-whisper opencc-python-reimplemented numpy
+
+      - name: Transcribe ${{ matrix.chunk }}
+        env:
+          CHUNK: ${{ matrix.chunk }}
+          WHISPER_MODEL: large-v3-turbo
         run: |
-          rm -f results/*/audio.*
+          IDX=${CHUNK#c}
+          OFFSET=$((10#$IDX * CHUNK_SECONDS))
+          python tools/bili/transcribe.py "chunks/$CHUNK.wav" "tx/$CHUNK.txt" "$OFFSET"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tx-${{ matrix.chunk }}
+          path: tx
+
+  merge:
+    needs: [fetch, asr]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: results
+          path: results
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tx-*
+          merge-multiple: true
+          path: tx
+
+      - name: Merge and commit
+        run: |
+          BV=$(tr -d '[:space:]' < tools/bili/job.txt)
+          ls tx || true
+          if ls tx/c*.txt >/dev/null 2>&1; then
+            cat $(ls tx/c*.txt | sort) > "results/$BV/transcript.txt"
+            wc -l "results/$BV/transcript.txt"
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
           git add results
           git commit -m "bili: results for $BV [skip ci]" || exit 0
+          git pull --rebase -q origin "$GITHUB_REF_NAME"
           git push

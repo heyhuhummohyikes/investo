@@ -193,6 +193,30 @@ def comments():
     log("comments:", len(out))
 
 
+def ranged_download(src, dest, chunk=1_500_000):
+    # The CDN drops long cross-border transfers, so fetch in small ranges with retries.
+    size, pos = None, 0
+    with open(dest, "wb") as f:
+        while size is None or pos < size:
+            for attempt in range(6):
+                try:
+                    r = S.get(src, headers={"Range": f"bytes={pos}-{pos + chunk - 1}"}, timeout=60)
+                    if r.status_code not in (200, 206):
+                        raise RuntimeError(f"HTTP {r.status_code}")
+                    break
+                except Exception as e:
+                    log(f"range {pos} attempt {attempt} failed: {e!r}")
+                    time.sleep(2 * (attempt + 1))
+            else:
+                raise RuntimeError(f"range {pos} failed")
+            if size is None:
+                cr = r.headers.get("Content-Range")
+                size = int(cr.rsplit("/", 1)[1]) if cr else len(r.content)
+            f.write(r.content)
+            pos += len(r.content)
+    return size
+
+
 @step("audio")
 def audio():
     params = {"bvid": BV, "cid": cid, "fnval": 16, "fnver": 0, "fourk": 0}
@@ -203,17 +227,14 @@ def audio():
         log("no dash audio:", pu.get("code"), pu.get("message"))
         return
     t = min(tracks, key=lambda a: a.get("bandwidth", 0))
+    dest = OUT / "audio.m4a"
     for src in [t.get("baseUrl") or t.get("base_url")] + (t.get("backupUrl") or t.get("backup_url") or []):
         try:
-            with S.get(src, stream=True, timeout=60) as r:
-                r.raise_for_status()
-                with open(OUT / "audio.m4a", "wb") as f:
-                    for chunk in r.iter_content(1 << 20):
-                        f.write(chunk)
-            log("audio bytes:", (OUT / "audio.m4a").stat().st_size)
+            log("audio bytes:", ranged_download(src, dest))
             return
         except Exception as e:
             log("audio src failed:", repr(e))
+            dest.unlink(missing_ok=True)
 
 
 tags()
