@@ -1,15 +1,19 @@
 """Fetch Bilibili video metadata, subtitles, AI summary, hot comments and audio.
 
 Usage: python fetch.py <BVID> <OUT_DIR>
+Set BILI_PROXY (e.g. socks5h://127.0.0.1:40000) to route through a proxy.
 Every step except metadata is best-effort; failures are logged, not fatal.
 """
 import hashlib
 import json
+import os
 import pathlib
+import random
 import re
 import sys
 import time
 import urllib.parse
+import uuid
 
 import requests
 
@@ -18,9 +22,13 @@ OUT = pathlib.Path(sys.argv[2])
 OUT.mkdir(parents=True, exist_ok=True)
 
 S = requests.Session()
+if os.environ.get("BILI_PROXY"):
+    S.proxies = {"http": os.environ["BILI_PROXY"], "https": os.environ["BILI_PROXY"]}
 S.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                  "(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Referer": f"https://www.bilibili.com/video/{BV}/",
     "Origin": "https://www.bilibili.com",
 })
@@ -41,7 +49,8 @@ def save(name, obj):
 
 def get_json(url, params=None):
     r = S.get(url, params=params, timeout=30)
-    r.raise_for_status()
+    if r.status_code != 200:
+        raise RuntimeError(f"HTTP {r.status_code} {url}: {r.text[:200]!r}")
     return r.json()
 
 
@@ -53,6 +62,8 @@ def wbi_key():
 
 
 def wbi(params, key):
+    if not key:
+        return params
     p = dict(params, wts=int(time.time()))
     p = {k: re.sub(r"[!'()*]", "", str(v)) for k, v in sorted(p.items())}
     p["w_rid"] = hashlib.md5((urllib.parse.urlencode(p) + key).encode()).hexdigest()
@@ -70,18 +81,60 @@ def step(name):
     return deco
 
 
-# Seed buvid cookies; Bilibili answers 412 to cookieless API calls more often.
-try:
-    S.get("https://www.bilibili.com/", timeout=30)
-    S.get("https://api.bilibili.com/x/frontend/finger/spi", timeout=30)
-except Exception as e:
-    log("cookie seed failed:", repr(e))
+def seed_cookies():
+    try:
+        r = S.get("https://www.bilibili.com/", timeout=30, headers={"Accept": "text/html"})
+        log("homepage:", r.status_code)
+    except Exception as e:
+        log("homepage failed:", repr(e))
+    try:
+        spi = get_json("https://api.bilibili.com/x/frontend/finger/spi")["data"]
+        S.cookies.set("buvid3", spi["b_3"], domain=".bilibili.com")
+        S.cookies.set("buvid4", spi["b_4"], domain=".bilibili.com")
+    except Exception as e:
+        log("spi failed:", repr(e))
+        S.cookies.set("buvid3", f"{uuid.uuid4()}{random.randint(10000, 99999)}infoc".upper(),
+                      domain=".bilibili.com")
+    S.cookies.set("b_nut", str(int(time.time())), domain=".bilibili.com")
+    S.cookies.set("_uuid", f"{uuid.uuid4()}{random.randint(10000, 99999)}infoc".upper(),
+                  domain=".bilibili.com")
+    log("cookies:", sorted(S.cookies.keys()))
 
-view = get_json("https://api.bilibili.com/x/web-interface/view", {"bvid": BV})
-save("view.json", view)
-if view.get("code") != 0:
-    log("view API error:", view.get("code"), view.get("message"))
+
+def view_from_page():
+    r = S.get(f"https://www.bilibili.com/video/{BV}/", timeout=30, headers={"Accept": "text/html"})
+    if r.status_code != 200:
+        raise RuntimeError(f"page HTTP {r.status_code}")
+    m = re.search(r"window\.__INITIAL_STATE__=(\{.*?\});\(function", r.text)
+    return {"code": 0, "data": json.loads(m.group(1))["videoData"]}
+
+
+seed_cookies()
+KEY = None
+try:
+    KEY = wbi_key()
+except Exception as e:
+    log("wbi key failed:", repr(e))
+
+view = None
+for name, fn in [
+    ("wbi/view", lambda: get_json("https://api.bilibili.com/x/web-interface/wbi/view", wbi({"bvid": BV}, KEY))),
+    ("view", lambda: get_json("https://api.bilibili.com/x/web-interface/view", {"bvid": BV})),
+    ("page", view_from_page),
+]:
+    try:
+        v = fn()
+        if v.get("code") == 0:
+            view = v
+            log("view via", name)
+            break
+        log(name, "code:", v.get("code"), v.get("message"))
+    except Exception as e:
+        log(name, "failed:", repr(e))
+if not view:
     sys.exit(1)
+
+save("view.json", view)
 d = view["data"]
 aid, cid, mid = d["aid"], d["pages"][0]["cid"], d["owner"]["mid"]
 meta = {
@@ -93,12 +146,6 @@ meta = {
 save("meta.json", meta)
 log("title:", d["title"], "| duration:", d["duration"], "s | pages:", len(d["pages"]))
 
-KEY = None
-try:
-    KEY = wbi_key()
-except Exception as e:
-    log("wbi key failed:", repr(e))
-
 
 @step("tags")
 def tags():
@@ -108,9 +155,8 @@ def tags():
 
 @step("subtitles")
 def subtitles():
-    p = wbi({"aid": aid, "cid": cid}, KEY) if KEY else {"aid": aid, "cid": cid}
     url = "https://api.bilibili.com/x/player/wbi/v2" if KEY else "https://api.bilibili.com/x/player/v2"
-    subs = get_json(url, p).get("data", {}).get("subtitle", {}).get("subtitles") or []
+    subs = get_json(url, wbi({"aid": aid, "cid": cid}, KEY)).get("data", {}).get("subtitle", {}).get("subtitles") or []
     save("subtitle_list.json", subs)
     log("subtitle tracks:", [s.get("lan") for s in subs])
     if not subs:
@@ -151,7 +197,7 @@ def comments():
 def audio():
     params = {"bvid": BV, "cid": cid, "fnval": 16, "fnver": 0, "fourk": 0}
     url = "https://api.bilibili.com/x/player/wbi/playurl" if KEY else "https://api.bilibili.com/x/player/playurl"
-    pu = get_json(url, wbi(params, KEY) if KEY else params)
+    pu = get_json(url, wbi(params, KEY))
     tracks = (pu.get("data") or {}).get("dash", {}).get("audio") or []
     if not tracks:
         log("no dash audio:", pu.get("code"), pu.get("message"))
