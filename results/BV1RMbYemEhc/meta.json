@@ -1,0 +1,37 @@
+{
+  "bvid": "BV1RMbYemEhc",
+  "aid": 112795152615082,
+  "cid": 500001617048854,
+  "title": "奇葩说【该不该看伴侣手机】",
+  "desc": "谢谢观看",
+  "owner": {
+    "mid": 584507005,
+    "name": "路子酱苦",
+    "face": "https://i1.hdslb.com/bfs/face/0e6247ffc69fc32cff1fc599086098dc8fda76e2.jpg"
+  },
+  "duration": 2432,
+  "pubdate": 1721118601,
+  "tname": "",
+  "pages": [
+    [
+      1,
+      "1",
+      2432
+    ]
+  ],
+  "stat": {
+    "aid": 112795152615082,
+    "view": 80725,
+    "danmaku": 96,
+    "reply": 26,
+    "favorite": 292,
+    "coin": 26,
+    "share": 187,
+    "now_rank": 0,
+    "his_rank": 0,
+    "like": 238,
+    "dislike": 0,
+    "evaluation": "",
+    "vt": 0
+  }
+}

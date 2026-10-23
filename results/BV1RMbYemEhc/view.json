@@ -1,0 +1,125 @@
+{
+  "code": 0,
+  "message": "OK",
+  "ttl": 1,
+  "data": {
+    "bvid": "BV1RMbYemEhc",
+    "aid": 112795152615082,
+    "videos": 1,
+    "tid": 71,
+    "tid_v2": 2014,
+    "tname": "",
+    "tname_v2": "",
+    "copyright": 1,
+    "pic": "http://i2.hdslb.com/bfs/archive/90079c17bf38b11fe02888e127807277d7fcdd45.png",
+    "title": "奇葩说【该不该看伴侣手机】",
+    "pubdate": 1721118601,
+    "ctime": 1721118601,
+    "desc": "谢谢观看",
+    "desc_v2": [
+      {
+        "raw_text": "谢谢观看",
+        "type": 1,
+        "biz_id": 0
+      }
+    ],
+    "state": 0,
+    "duration": 2432,
+    "rights": {
+      "bp": 0,
+      "elec": 0,
+      "download": 1,
+      "movie": 0,
+      "pay": 0,
+      "hd5": 1,
+      "no_reprint": 0,
+      "autoplay": 1,
+      "ugc_pay": 0,
+      "is_cooperation": 0,
+      "ugc_pay_preview": 0,
+      "no_background": 0,
+      "clean_mode": 0,
+      "is_stein_gate": 0,
+      "is_360": 0,
+      "no_share": 0,
+      "arc_pay": 0,
+      "free_watch": 0
+    },
+    "owner": {
+      "mid": 584507005,
+      "name": "路子酱苦",
+      "face": "https://i1.hdslb.com/bfs/face/0e6247ffc69fc32cff1fc599086098dc8fda76e2.jpg"
+    },
+    "stat": {
+      "aid": 112795152615082,
+      "view": 80725,
+      "danmaku": 96,
+      "reply": 26,
+      "favorite": 292,
+      "coin": 26,
+      "share": 187,
+      "now_rank": 0,
+      "his_rank": 0,
+      "like": 238,
+      "dislike": 0,
+      "evaluation": "",
+      "vt": 0
+    },
+    "argue_info": {
+      "argue_msg": "",
+      "argue_type": 0,
+      "argue_link": ""
+    },
+    "dynamic": "",
+    "cid": 500001617048854,
+    "dimension": {
+      "width": 1920,
+      "height": 1080,
+      "rotate": 0
+    },
+    "premiere": null,
+    "teenage_mode": 0,
+    "is_chargeable_season": false,
+    "is_story": false,
+    "is_upower_exclusive": false,
+    "is_upower_play": false,
+    "is_upower_preview": false,
+    "enable_vt": 0,
+    "vt_display": "",
+    "is_upower_exclusive_with_qa": false,
+    "is_hua_sheng": false,
+    "no_cache": false,
+    "pages": [
+      {
+        "cid": 500001617048854,
+        "page": 1,
+        "from": "vupload",
+        "part": "1",
+        "duration": 2432,
+        "vid": "",
+        "weblink": "",
+        "dimension": {
+          "width": 1920,
+          "height": 1080,
+          "rotate": 0
+        },
+        "first_frame": "http://i0.hdslb.com/bfs/storyff/n240716sadpjnby4to0nbx7fxj70pd92_firsti.jpg",
+        "ctime": 1721118601
+      }
+    ],
+    "subtitle": {
+      "allow_submit": false,
+      "list": []
+    },
+    "is_season_display": false,
+    "user_garb": {
+      "url_image_ani_cut": ""
+    },
+    "honor_reply": {},
+    "like_icon": "",
+    "need_jump_bv": false,
+    "disable_show_up_info": false,
+    "is_story_play": 1,
+    "is_view_self": false
+  }
+}
